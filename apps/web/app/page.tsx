@@ -58,7 +58,7 @@ function JobCard({ job, save }: { job: Job; save: (id: string, values: Tracking)
     }
   }
   return <article className="card">
-    <div className="meta"><span>{work24 ? '고용24' : '직접 등록'}</span>
+    <div className="meta"><span>{work24 ? '고용24' : '직접 등록 · ' + new URL(job.url).hostname}</span>
       <span>{deadline ? (current.deadline ? '개인 마감 ' : '공고 마감 ') + deadline : '마감일 미정'}</span></div>
     <h2>{job.title}</h2>
     <p>{[job.company, job.role, careers[job.career], job.region].filter(Boolean).join(' · ')}</p>
@@ -97,6 +97,7 @@ export default function Home() {
   const [notice, setNotice] = useState('');
   const [version, setVersion] = useState(0);
   const [filters, setFilters] = useState('');
+  const searchForm = useRef<HTMLFormElement>(null);
   const seenUser = useRef<string | undefined>(undefined);
 
   useEffect(() => {
@@ -235,7 +236,7 @@ export default function Home() {
           <button disabled={registerPending}>등록</button>
         </form>
       </section>}
-      <form key={filters} className="card form grid" onSubmit={search}>
+      <form key={filters} ref={searchForm} className="card form grid" onSubmit={search}>
         <label className="wide">검색어<input name="q" maxLength={120} defaultValue={activeFilters.get('q') ?? ''} placeholder="직무, 회사, 지역" /></label>
         <label>직무<input name="role" maxLength={120} defaultValue={activeFilters.get('role') ?? ''} /></label>
         <label>경력<select name="career" defaultValue={activeFilters.get('career') ?? ''}>
@@ -244,6 +245,7 @@ export default function Home() {
         <label>지역<input name="region" maxLength={120} defaultValue={activeFilters.get('region') ?? ''} /></label>
         <label>기술 스택<input name="skill" maxLength={40} defaultValue={activeFilters.get('skill') ?? ''} placeholder="예. TypeScript" /></label>
         <div className="actions wide"><button>검색</button><button type="button" className="quiet" onClick={() => {
+          searchForm.current?.reset();
           setPage(1); setFilters(''); setVersion(value => value + 1);
         }}>초기화</button></div>
       </form>

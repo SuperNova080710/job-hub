@@ -15,6 +15,18 @@ export function canonicalUrl(value: string) {
   try {
     const url = new URL(value);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return null;
+    if (['www.work24.go.kr', 'm.work24.go.kr'].includes(url.hostname)
+      && url.pathname === '/wk/a/b/1500/empDetailAuthView.do') {
+      const id = url.searchParams.get('wantedAuthNo');
+      const provider = url.searchParams.get('infoTypeCd');
+      if (id && /^[A-Za-z0-9_-]{1,64}$/.test(id) && (!provider || provider === 'VALIDATION')) {
+        const official = new URL('https://www.work24.go.kr' + url.pathname);
+        official.search = new URLSearchParams({
+          wantedAuthNo: id, infoTypeCd: 'VALIDATION', infoTypeGroup: 'tb_workinfoworknet',
+        }).toString();
+        return official.href;
+      }
+    }
     url.hash = '';
     const tracking = /^(utm_.+|fbclid|gclid)$/i;
     for (const key of Array.from(url.searchParams.keys())) {
