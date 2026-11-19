@@ -1,5 +1,5 @@
 import {
-  BadRequestException, Body, Controller, Get, Header, Headers,
+  BadRequestException, Body, Controller, Get, Headers,
   InternalServerErrorException, NotFoundException, Param, Post, Put, Query,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -70,7 +70,6 @@ function check(error: { code: string } | null) {
 }
 
 @Controller()
-@Header('Cache-Control', 'no-store')
 export class CatalogController {
   @Get('health')
   health() { return { ok: true }; }
