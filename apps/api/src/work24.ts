@@ -6,6 +6,7 @@ import {
 import { createClient } from '@supabase/supabase-js';
 import { SaxesParser } from 'saxes';
 import { z } from 'zod';
+import { canonicalUrl } from './catalog';
 
 const listUrl = 'https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo210L01.do';
 const detailUrl = 'https://www.work24.go.kr/wk/a/b/1500/empDetailAuthView.do';
@@ -24,7 +25,7 @@ function normalizeDate(value = '') {
 }
 
 function normalizeCareer(value = '') {
-  if (value.includes('무관') || (value.includes('신입') && value.includes('경력'))) return 'any';
+  if (value.includes('무관') || value.includes('관계없음') || (value.includes('신입') && value.includes('경력'))) return 'any';
   if (value.includes('경력')) return 'experienced';
   return value.includes('신입') ? 'entry' : 'unknown';
 }
@@ -32,12 +33,9 @@ function normalizeCareer(value = '') {
 function toJob(row: Record<string, string>) {
   const id = row.wantedAuthNo;
   if (!id || !/^[A-Za-z0-9_-]{1,64}$/.test(id) || !row.company || !row.title) return null;
-  const url = new URL(detailUrl);
-  url.search = new URLSearchParams({
-    wantedAuthNo: id, infoTypeCd: 'VALIDATION', infoTypeGroup: 'tb_workinfoworknet',
-  }).toString();
+  const url = canonicalUrl(detailUrl + '?wantedAuthNo=' + id)!;
   return {
-    source: 'work24', external_id: id, url: url.href, title: row.title.slice(0, 120),
+    source: 'work24', external_id: id, url, title: row.title.slice(0, 120),
     company: row.company.slice(0, 120), region: row.region?.slice(0, 120) ?? '',
     role: row.title.slice(0, 120), career: normalizeCareer(row.career),
     skills: Array.from(technologies).filter(([, pattern]) => pattern.test(row.title)).map(([name]) => name),
