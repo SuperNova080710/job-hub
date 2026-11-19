@@ -1,10 +1,11 @@
 import {
   BadRequestException, Body, Controller, Get, Headers,
   InternalServerErrorException, NotFoundException, Param, Post, Put, Query,
-  UnauthorizedException,
+  ServiceUnavailableException, UnauthorizedException,
 } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
+import { loadJobFeeds, searchJobFeeds } from './job-feeds';
 
 const career = z.enum(['entry', 'experienced', 'any', 'unknown']);
 const short = z.string().trim().max(120);
@@ -97,6 +98,31 @@ export class CatalogController {
     });
     check(error);
     return data;
+  }
+
+  @Get('discover')
+  async discover(@Headers('authorization') header: string, @Query() query: unknown) {
+    const { db } = await session(header);
+    const input = parse(filters, query);
+    const feeds = await loadJobFeeds();
+    if (feeds.failedAll) {
+      throw new ServiceUnavailableException('채용 출처에 연결하지 못했습니다.');
+    }
+    const result = searchJobFeeds(feeds.jobs, input);
+    const items = result.items.map(job => ({ ...job, url: canonicalUrl(job.url) ?? job.url }));
+    if (items.length === 0) return { ...result, unavailable: feeds.unavailable };
+
+    const { data, error } = await db.from('jobs')
+      .select('url, tracking(favorite, status, notes, tags, deadline)')
+      .in('url', items.map(job => job.url));
+    check(error);
+    const tracked = new Map((data ?? []).flatMap(row =>
+      row.tracking.map(tracking => [row.url, tracking] as const)));
+    return {
+      ...result,
+      items: items.map(job => ({ ...job, tracking: tracked.get(job.url) ?? null })),
+      unavailable: feeds.unavailable,
+    };
   }
 
   @Post('jobs')
