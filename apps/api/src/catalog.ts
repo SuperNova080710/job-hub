@@ -5,7 +5,8 @@ import {
 } from '@nestjs/common';
 import { createClient } from '@supabase/supabase-js';
 import { z } from 'zod';
-import { loadJobFeeds, searchJobFeeds } from './job-feeds';
+import { classifyJobRole, loadJobFeeds, searchJobFeeds, type FeedJob } from './job-feeds';
+import { koreaDate, loadKoreanFeeds, type PlatformFeed } from './korean-job-feeds';
 
 const career = z.enum(['entry', 'experienced', 'any', 'unknown']);
 const short = z.string().trim().max(120);
@@ -48,6 +49,7 @@ const filters = z.object({
   q: short.default(''), role: short.default(''), region: short.default(''),
   career: career.optional(), skill: label.optional(),
   page: z.coerce.number().int().min(1).max(1000).default(1),
+  source: z.enum(['greenhouse', 'lever', 'work24', 'saramin', 'wanted']).optional(),
   saved: z.enum(['true', 'false']).default('false'),
 });
 const tracking = z.object({
@@ -82,6 +84,22 @@ function check(error: { code: string } | null) {
   if (error) throw new InternalServerErrorException('저장소 요청을 처리하지 못했습니다.');
 }
 
+async function loadWork24(db: Awaited<ReturnType<typeof session>>['db']): Promise<PlatformFeed> {
+  if (process.env.WORK24_ENABLED !== 'true') return { jobs: [], state: 'pending' };
+  const { data, error } = await db.from('jobs')
+    .select('id,url,title,company,role,region,career,skills,deadline,posted_on,created_at')
+    .eq('source', 'work24')
+    .or('deadline.is.null,deadline.gte.' + koreaDate())
+    .order('created_at', { ascending: false }).order('id').limit(500);
+  if (error) return { jobs: [], state: 'unavailable' };
+  const jobs = (data ?? []).map((row): FeedJob => ({
+    id: row.id, url: row.url, title: row.title, company: row.company, source: 'work24',
+    role: classifyJobRole(row.title) ?? row.role, region: row.region, career: row.career,
+    skills: row.skills, deadline: row.deadline, sortTime: Date.parse(row.posted_on ?? row.created_at),
+  }));
+  return { jobs, state: 'ready' };
+}
+
 @Controller()
 export class CatalogController {
   @Get('health')
@@ -104,13 +122,25 @@ export class CatalogController {
   async discover(@Headers('authorization') header: string, @Query() query: unknown) {
     const { db } = await session(header);
     const input = parse(filters, query);
-    const feeds = await loadJobFeeds();
-    if (feeds.failedAll) {
+    const [publicFeeds, { saramin, wanted }, work24] = await Promise.all([
+      loadJobFeeds(), loadKoreanFeeds(), loadWork24(db),
+    ]);
+    const sources = { work24: work24.state, saramin: saramin.state, jobkorea: 'restricted', wanted: wanted.state };
+    if (publicFeeds.failedAll && ![saramin, wanted, work24].some(feed => feed.state === 'ready')) {
       throw new ServiceUnavailableException('채용 출처에 연결하지 못했습니다.');
     }
-    const result = searchJobFeeds(feeds.jobs, input);
-    const items = result.items.map(job => ({ ...job, url: canonicalUrl(job.url) ?? job.url }));
-    if (items.length === 0) return { ...result, unavailable: feeds.unavailable };
+    const unavailable = [...publicFeeds.unavailable];
+    if (work24.state === 'unavailable') unavailable.push('고용24');
+    if (saramin.state === 'unavailable') unavailable.push('사람인');
+    if (wanted.state === 'unavailable') unavailable.push('원티드');
+
+    const feeds = [...publicFeeds.jobs, ...work24.jobs, ...saramin.jobs, ...wanted.jobs].map(job => ({
+      ...job, url: canonicalUrl(job.url) ?? job.url,
+      originalUrl: job.source === 'saramin' || job.source === 'wanted' ? job.url : undefined,
+    }));
+    const result = searchJobFeeds(feeds, input);
+    const items = result.items;
+    if (items.length === 0) return { ...result, unavailable, sources };
 
     const { data, error } = await db.from('jobs')
       .select('url, tracking(favorite, status, notes, tags, deadline)')
@@ -121,7 +151,8 @@ export class CatalogController {
     return {
       ...result,
       items: items.map(job => ({ ...job, tracking: tracked.get(job.url) ?? null })),
-      unavailable: feeds.unavailable,
+      unavailable,
+      sources,
     };
   }
 

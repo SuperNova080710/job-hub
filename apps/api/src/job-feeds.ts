@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { fetchJobFeedJson } from './job-feed-http';
 
 type Source = 'greenhouse' | 'lever';
 type Board = { source: Source; token: string; company: string; locations?: string[] };
@@ -24,10 +25,11 @@ const leverRow = z.object({
 
 type SearchInput = {
   q: string; role: string; region: string; career?: string; skill?: string; page: number;
+  source?: FeedJob['source'];
 };
-type FeedJob = {
-  id: string; source: Source; url: string; title: string; company: string; role: string; region: string;
-  career: 'entry' | 'experienced' | 'unknown'; skills: string[]; deadline: null; sortTime: number;
+export type FeedJob = {
+  id: string; source: Source | 'work24' | 'saramin' | 'wanted'; url: string; title: string; company: string; role: string; region: string;
+  career: 'entry' | 'experienced' | 'any' | 'unknown'; skills: string[]; deadline: string | null; sortTime: number; originalUrl?: string;
 };
 
 const koreanLocation = /\b(?:korea|seoul|pangyo|seongnam|gyeonggi(?:do)?|daejeon|busan|incheon)\b|한국|서울|판교|성남|경기|대전|부산|인천/i;
@@ -46,6 +48,11 @@ const titleSkills: [string, RegExp][] = [
   ['c#', /\bc#/i], ['c++', /\bc\+\+/i], ['next.js', /\bnext\.?js\b/i],
 ];
 
+export const classifyJobRole = (title: string) => rolePatterns.find(([, pattern]) => pattern.test(title))?.[0];
+
+export const inferJobSkills = (title: string) =>
+  titleSkills.filter(([, pattern]) => pattern.test(title)).map(([skill]) => skill);
+
 function classifyLocation(region: string) {
   const aliases = [
     [/\bseoul\b/i, '서울'], [/\b(?:pangyo|seongnam|gyeonggi(?:do)?)\b/i, '경기'],
@@ -60,7 +67,7 @@ function toJob(board: Board, entry: {
 }): FeedJob | null {
   const title = entry.title.trim();
   const location = entry.locations.find(value => koreanLocation.test(value));
-  const role = rolePatterns.find(([, pattern]) => pattern.test(title))?.[0];
+  const role = classifyJobRole(title);
   if (!title || !location || !role || /expression of interest|talent (pool|community)|인재풀|채용\s*관심\s*등록/i.test(title)) return null;
 
   try {
@@ -72,7 +79,7 @@ function toJob(board: Board, entry: {
       region: classifyLocation(location),
       career: /\b(?:intern(?:ship)?|new grad(?:uate)?|entry[- ]level)\b|인턴|신입/i.test(title) ? 'entry'
         : /\b(?:senior|principal|staff|lead|manager)\b|경력/i.test(title) ? 'experienced' : 'unknown',
-      skills: titleSkills.filter(([, pattern]) => pattern.test(title)).map(([skill]) => skill),
+      skills: inferJobSkills(title),
       deadline: null, sortTime: Number.isFinite(entry.time) ? entry.time! : 0,
     };
   } catch {
@@ -110,24 +117,7 @@ async function fetchBoard(board: Board) {
     : 'https://api.lever.co/v0/postings/' + board.token + '?mode=json';
   const url = new URL(path);
   for (const location of board.locations ?? []) url.searchParams.append('location', location);
-  const response = await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(6000) });
-  if (!response.ok || !response.body) throw new Error('Job feed unavailable');
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let total = 0;
-  let json = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > 3_000_000) {
-      await reader.cancel();
-      throw new Error('Job feed exceeded its size limit');
-    }
-    json += decoder.decode(value, { stream: true });
-  }
-  return parseBoard(board, JSON.parse(json + decoder.decode()));
+  return parseBoard(board, await fetchJobFeedJson(url));
 }
 
 async function loadBoards() {
@@ -156,6 +146,7 @@ export function searchJobFeeds(jobs: FeedJob[], filters: SearchInput) {
   const contains = (value: string, term: string) => normalize(value).includes(normalize(term));
   const tokens = filters.q.trim().split(/\s+/);
   const matching = jobs.filter(job => tokens.every(term => contains([job.title, job.company, job.role, job.region].join(' '), term))
+    && (!filters.source || job.source === filters.source)
     && contains(job.role, filters.role)
     && contains(job.region, filters.region)
     && (!filters.career || job.career === filters.career)

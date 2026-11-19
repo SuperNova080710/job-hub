@@ -17,11 +17,19 @@ type Tracking = {
   tags: string[]; deadline: string | null;
 };
 type Job = {
-  id: string; url: string; source: 'manual' | 'work24' | 'greenhouse' | 'lever'; title: string; company: string;
-  role: string; region: string; career: keyof typeof careers; skills: string[];
+  id: string; url: string; source: 'manual' | 'work24' | 'greenhouse' | 'lever' | 'saramin' | 'wanted'; title: string; company: string;
+  role: string; region: string; career: keyof typeof careers; skills: string[]; originalUrl?: string;
   deadline: string | null; tracking: Tracking | null;
 };
-type Results = { items: Job[]; hasMore: boolean; unavailable?: string[] };
+const platformLabels = { work24: '고용24', saramin: '사람인', jobkorea: '잡코리아', wanted: '원티드' };
+type PlatformStatus = 'ready' | 'pending' | 'unavailable' | 'restricted';
+type Results = {
+  items: Job[]; hasMore: boolean; unavailable?: string[];
+  sources?: Record<keyof typeof platformLabels, PlatformStatus>;
+};
+const platformStatus: Record<PlatformStatus, string> = {
+  ready: '연결됨', pending: '승인·설정 대기', unavailable: '일시 연결 실패', restricted: '개인용 API 제공 제한',
+};
 const blank: Tracking = { favorite: false, status: null, notes: '', tags: [], deadline: null };
 const empty: Results = { items: [], hasMore: false };
 const split = (value: FormDataEntryValue | null) => String(value ?? '').split(',').map(s => s.trim()).filter(Boolean);
@@ -42,6 +50,8 @@ function JobCard({ job, save }: { job: Job; save: (id: string, values: Tracking)
   const source = work24 ? '고용24'
     : job.source === 'greenhouse' || hostname === 'job-boards.greenhouse.io' || hostname === 'boards.greenhouse.io' ? 'Greenhouse'
     : job.source === 'lever' || hostname === 'jobs.lever.co' ? 'Lever'
+    : job.source === 'saramin' || /^(?:(?:www|m)\.)?saramin\.co\.kr$/.test(hostname) ? '사람인'
+    : job.source === 'wanted' || /^(?:(?:www|m)\.)?wanted\.co\.kr$/.test(hostname) ? '원티드'
     : '직접 등록 · ' + hostname;
   const deadline = current.deadline ?? job.deadline;
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -68,7 +78,7 @@ function JobCard({ job, save }: { job: Job; save: (id: string, values: Tracking)
     <h2>{job.title}</h2>
     <p>{[job.company, job.role, careers[job.career], job.region].filter(Boolean).join(' · ')}</p>
     {job.skills.length > 0 && <div className="chips">{job.skills.map(skill => <span key={skill}>{skill}</span>)}</div>}
-    <a href={job.url} target="_blank" rel="noopener noreferrer">{work24 ? '채용정보 제공사이트로 이동' : '원문 공고 열기'} ↗</a>
+    <a href={job.originalUrl ?? job.url} target="_blank" rel="noopener noreferrer">{work24 ? '채용정보 제공사이트로 이동' : '원문 공고 열기'} ↗</a>
     {work24 && <footer>{attribution && <img src={attribution} alt="고용24" width={100} />}
       <small>본 자료는 고용노동부 고용24(www.work24.go.kr)에서 제공된 정보이며, 무단복제 및 배포를 금지합니다.</small>
     </footer>}
@@ -246,6 +256,12 @@ export default function Home() {
           <button disabled={registerPending}>등록</button>
         </form>
       </section>}
+      {mode === 'discover' && results.sources && <details className="card">
+        <summary>채용 출처 연결 상태</summary>
+        <ul>{(Object.keys(platformLabels) as (keyof typeof platformLabels)[]).map(key => (
+          <li key={key}>{platformLabels[key]} · {platformStatus[results.sources![key]]}</li>
+        ))}</ul>
+      </details>}
       <form key={filters} ref={searchForm} className="card form grid" onSubmit={search}>
         <label className="wide">검색어<input name="q" maxLength={120} defaultValue={activeFilters.get('q') ?? ''} placeholder="직무, 회사, 지역" /></label>
         <label>직무<input name="role" maxLength={120} defaultValue={activeFilters.get('role') ?? ''} /></label>
@@ -254,6 +270,14 @@ export default function Home() {
         </select></label>
         <label>지역<input name="region" maxLength={120} defaultValue={activeFilters.get('region') ?? ''} /></label>
         <label>기술 스택<input name="skill" maxLength={40} defaultValue={activeFilters.get('skill') ?? ''} placeholder="예. TypeScript" /></label>
+        {mode === 'discover' && <label>채용 출처<select name="source" defaultValue={activeFilters.get('source') ?? ''}>
+          <option value="">연결된 출처 전체</option>
+          <option value="greenhouse">Greenhouse</option>
+          <option value="lever">Lever</option>
+          <option value="work24" disabled={results.sources?.work24 !== 'ready'}>고용24</option>
+          <option value="saramin" disabled={results.sources?.saramin !== 'ready'}>사람인</option>
+          <option value="wanted" disabled={results.sources?.wanted !== 'ready'}>원티드</option>
+        </select></label>}
         <div className="actions wide"><button>검색</button><button type="button" className="quiet" onClick={() => {
           searchForm.current?.reset();
           setPage(1); setFilters(''); setVersion(value => value + 1);
@@ -267,7 +291,7 @@ export default function Home() {
       {!loading && !error && results.items.length === 0 && <p className="empty">표시할 공고가 없습니다.</p>}
       <div className="results">{results.items.map(job => <JobCard key={job.id} job={job} save={async (id, values) => {
         let savedId = id;
-        if (job.source === 'greenhouse' || job.source === 'lever') {
+        if (job.source !== 'manual' && job.source !== 'work24') {
           const registered = await request('/jobs', 'POST', {
             url: job.url, title: job.title, company: job.company, role: job.role, region: job.region,
             career: job.career, skills: job.skills, deadline: job.deadline,
