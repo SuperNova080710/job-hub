@@ -17,11 +17,11 @@ type Tracking = {
   tags: string[]; deadline: string | null;
 };
 type Job = {
-  id: string; url: string; source: 'manual' | 'work24'; title: string; company: string;
+  id: string; url: string; source: 'manual' | 'work24' | 'greenhouse' | 'lever'; title: string; company: string;
   role: string; region: string; career: keyof typeof careers; skills: string[];
   deadline: string | null; tracking: Tracking | null;
 };
-type Results = { items: Job[]; hasMore: boolean };
+type Results = { items: Job[]; hasMore: boolean; unavailable?: string[] };
 const blank: Tracking = { favorite: false, status: null, notes: '', tags: [], deadline: null };
 const empty: Results = { items: [], hasMore: false };
 const split = (value: FormDataEntryValue | null) => String(value ?? '').split(',').map(s => s.trim()).filter(Boolean);
@@ -38,6 +38,11 @@ function JobCard({ job, save }: { job: Job; save: (id: string, values: Tracking)
   const [feedback, setFeedback] = useState('');
   const current = job.tracking ?? blank;
   const work24 = job.source === 'work24';
+  const hostname = new URL(job.url).hostname;
+  const source = work24 ? '고용24'
+    : job.source === 'greenhouse' || hostname === 'job-boards.greenhouse.io' || hostname === 'boards.greenhouse.io' ? 'Greenhouse'
+    : job.source === 'lever' || hostname === 'jobs.lever.co' ? 'Lever'
+    : '직접 등록 · ' + hostname;
   const deadline = current.deadline ?? job.deadline;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -58,7 +63,7 @@ function JobCard({ job, save }: { job: Job; save: (id: string, values: Tracking)
     }
   }
   return <article className="card">
-    <div className="meta"><span>{work24 ? '고용24' : '직접 등록 · ' + new URL(job.url).hostname}</span>
+    <div className="meta"><span>{source}</span>
       <span>{deadline ? (current.deadline ? '개인 마감 ' : '공고 마감 ') + deadline : '마감일 미정'}</span></div>
     <h2>{job.title}</h2>
     <p>{[job.company, job.role, careers[job.career], job.region].filter(Boolean).join(' · ')}</p>
@@ -87,7 +92,7 @@ function JobCard({ job, save }: { job: Job; save: (id: string, values: Tracking)
 export default function Home() {
   const [token, setToken] = useState('');
   const [results, setResults] = useState<Results>(empty);
-  const [mode, setMode] = useState<'all' | 'saved'>('all');
+  const [mode, setMode] = useState<'discover' | 'all' | 'saved'>('discover');
   const [page, setPage] = useState(1);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -124,10 +129,13 @@ export default function Home() {
       setLoading(true);
       setError('');
       try {
-        const response = await fetch(api + '/jobs?' + params, {
+        const path = mode === 'discover' ? '/discover' : '/jobs';
+        const response = await fetch(api + path + '?' + params, {
           headers: { Authorization: 'Bearer ' + token }, signal: controller.signal,
         });
-        if (!response.ok) throw new Error(response.status === 401 ? '다시 로그인해 주세요.' : '공고를 불러오지 못했습니다.');
+        if (response.status === 401) throw new Error('다시 로그인해 주세요.');
+        if (response.status === 503) throw new Error('채용 출처 연결에 실패했습니다. 잠시 뒤 다시 검색해 주세요.');
+        if (!response.ok) throw new Error('공고를 불러오지 못했습니다.');
         const data: Results = await response.json();
         if (controller.signal.aborted) return;
         if (data.items.length === 0 && page > 1) setPage(page - 1);
@@ -152,6 +160,7 @@ export default function Home() {
       throw new Error(typeof data.message === 'string' && response.status === 400
         ? data.message : '요청을 저장하지 못했습니다.');
     }
+    return response;
   }
   async function login(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -218,10 +227,11 @@ export default function Home() {
       </form> : <p>Supabase 연결 설정이 필요합니다.</p>}
       {error && <p role="alert">{error}</p>}
     </section></main> : <main>
-      <div className="heading"><div><h1>{mode === 'all' ? '채용공고' : '내 지원 현황'}</h1></div>
+      <div className="heading"><div><h1>{mode === 'discover' ? '통합 채용 검색' : mode === 'all' ? '등록 공고' : '내 지원 현황'}</h1></div>
         <button aria-expanded={adding} onClick={() => { setAdding(!adding); setNotice(''); }}>공고 링크 등록</button></div>
       <nav aria-label="공고 메뉴">
-        <button aria-pressed={mode === 'all'} onClick={() => { setMode('all'); setPage(1); }}>통합 검색</button>
+        <button aria-pressed={mode === 'discover'} onClick={() => { setMode('discover'); setPage(1); }}>통합 검색</button>
+        <button aria-pressed={mode === 'all'} onClick={() => { setMode('all'); setPage(1); }}>등록 공고</button>
         <button aria-pressed={mode === 'saved'} onClick={() => { setMode('saved'); setPage(1); }}>내 공고</button>
       </nav>
       {adding && <section className="card"><h2>공고 링크 등록</h2>
@@ -252,9 +262,20 @@ export default function Home() {
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
       {loading && <p role="status">불러오는 중…</p>}
+      {!loading && !error && mode === 'discover' && !!results.unavailable?.length
+        && <p role="status">일부 채용 출처에 연결하지 못했습니다. {results.unavailable.join(', ')}</p>}
       {!loading && !error && results.items.length === 0 && <p className="empty">표시할 공고가 없습니다.</p>}
       <div className="results">{results.items.map(job => <JobCard key={job.id} job={job} save={async (id, values) => {
-        await request('/jobs/' + id + '/tracking', 'PUT', values);
+        let savedId = id;
+        if (job.source === 'greenhouse' || job.source === 'lever') {
+          const registered = await request('/jobs', 'POST', {
+            url: job.url, title: job.title, company: job.company, role: job.role, region: job.region,
+            career: job.career, skills: job.skills, deadline: job.deadline,
+          });
+          const saved: { id: string } = await registered.json();
+          savedId = saved.id;
+        }
+        await request('/jobs/' + savedId + '/tracking', 'PUT', values);
         setResults(previous => ({
           ...previous, items: previous.items.map(item => item.id === id ? { ...item, tracking: values } : item),
         }));

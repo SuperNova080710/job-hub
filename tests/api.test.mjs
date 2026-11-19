@@ -5,6 +5,7 @@ import { createServer } from 'node:net';
 import { test } from 'node:test';
 import catalog from '../apps/api/dist/catalog.js';
 import work24 from '../apps/api/dist/work24.js';
+import feeds from '../apps/api/dist/job-feeds.js';
 
 test('manual URLs retain meaningful query parameters', () => {
   assert.equal(catalog.canonicalUrl('HTTPS://EXAMPLE.ORG/jobs?id=42&utm_medium=email#about'),
@@ -36,6 +37,24 @@ test('Work24 XML normalizes and deduplicates documented listing fields', () => {
   }
 });
 
+test('public job feeds combine Korean listings, remove duplicates and apply filters', () => {
+  const greenhouse = { source: 'greenhouse', token: 'sample', company: '회사 A' };
+  const lever = { source: 'lever', token: 'sample', company: '회사 B' };
+  const a = { id: 29, title: 'Backend Engineer Intern (Java)', location: { name: 'Seoul, South Korea' },
+    absolute_url: 'https://job-boards.greenhouse.io/sample/jobs/29', updated_at: '2026-11-01T00:00:00Z' };
+  const b = { id: 'example', text: 'Backend Developer, Kotlin', categories: { location: 'Seoul' },
+    hostedUrl: 'https://jobs.lever.co/sample/example', createdAt: Date.parse('2026-11-02T00:00:00Z') };
+  const jobs = [...feeds.parseBoard(greenhouse, { jobs: [a, a,
+    { ...a, id: 30, title: 'Software Engineer 인재풀' },
+    { ...a, id: 31, location: { name: 'Toronto, Canada' } },
+    { ...a, id: 32, absolute_url: 'javascript:alert(1)' }] }), ...feeds.parseBoard(lever, [b])];
+  const filters = { q: '백엔드 개발자', region: '서울', role: '', page: 1 };
+  assert.deepEqual(feeds.searchJobFeeds(jobs, filters).items.map(job => job.source), ['lever', 'greenhouse']);
+  assert.deepEqual(feeds.searchJobFeeds(jobs, { ...filters, career: 'entry', skill: 'java' }).items.map(job => job.title), [a.title]);
+  assert.deepEqual(feeds.searchJobFeeds(jobs, { ...filters, region: '대전' }).items, []);
+  assert.throws(() => feeds.parseBoard(lever, { error: 'Unavailable' }));
+});
+
 async function freePort() {
   const server = createServer();
   server.listen(0, '127.0.0.1');
@@ -62,6 +81,7 @@ test('Nest health is reachable and rejects unauthorized calls and disabled sync'
     assert.equal(health.headers.get('cache-control'), 'no-store');
     assert.deepEqual(await health.json(), { ok: true });
     assert.equal((await fetch(base + '/jobs')).status, 401);
+    assert.equal((await fetch(base + '/discover')).status, 401);
     assert.equal((await fetch(base + '/internal/work24')).status, 404);
   } finally {
     child.kill();
