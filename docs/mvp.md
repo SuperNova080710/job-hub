@@ -16,7 +16,7 @@ Next.js App Router가 UI를 제공하며 NestJS 11이 요청을 검증하고 Sup
 | API | 계약 |
 | --- | --- |
 | GET /health | 런타임 상태 |
-| GET /discover | Greenhouse·Lever 공개 공고의 q, role, career, region, skill, page 필터 |
+| GET /discover | 공개 피드 및 승인된 국내 출처의 q, role, region, career, skill, source, page 필터 |
 | GET /jobs | 등록·저장 공고의 q, role, career, region, skill, page, saved 필터 |
 | POST /jobs | URL과 수동 메타데이터로 등록 또는 기존 공고 반환 |
 | PUT /jobs/:id/tracking | 즐겨찾기, 상태, 메모, 태그, 개인 마감일 전체 저장 |
@@ -28,7 +28,10 @@ PostgreSQL의 jobs는 인증 사용자용 공식 공고와 소유자 전용 수�
 
 - 고용24 [이용 안내](https://www.work24.go.kr/cm/e/a/0110/selectOpenApiIntro.do)에서 기업회원 가입과 심사·키 발급을 확인했다. [목록 명세](https://www.work24.go.kr/cm/e/a/0110/selectOpenApiSvcInfo.do?fullApiSvcId=000000000000000000000000000000)는 XML, 최대 100건/페이지, 시작 페이지 최대 1000을 명시한다. [상세 명세](https://m.work24.go.kr/cm/e/a/0110/selectOpenApiSvcInfo.do?fullApiSvcId=000000000000000000000000000000%5E000000000000000000000000000001%5E000000000000000000000000000003)는 원문 이동과 공식 출처 이미지 및 안내 문구를 요구한다. MVP는 목록 메타데이터와 원문 이동만 사용한다. 승인된 환경에서 출처 이미지 URL을 설정한다.
 - 공개 문서에서 이 프로젝트의 저장 허용 기간과 키별 일일 쿼터를 확인하지 못했다. 승인 범위, 쿼터, 보존 기간, 허용 직종 코드와 출처 자산 확인 전 실호출을 비활성화한다. 자체 초기 한도는 최대 하루 2회(실행당 최대 2페이지, 50건/페이지)이며 승인 한도를 더 낮게 설정할 수 있다. 실패 후 당일 자동 재시도는 없으며 다음 날 재개한다. 원본 XML과 제공처 개인정보는 저장하지 않는다.
-- 사람인 별도 승인 후 작업. 다른 사이트는 이용 조건 검토 전 자동 수집하지 않는다.
+- 고용24는 승인 후 기존 수집 경로에서 받은 미마감 공고 중 최신 500건을 통합 검색에 포함한다. 검색 요청이 고용24 API 호출 횟수를 늘리지 않는다.
+- 사람인 [채용 공고 API](https://oapi.saramin.co.kr/guide/job-search)는 승인된 키를 서버의 `SARAMIN_ACCESS_KEY`에 넣고 `SARAMIN_ENABLED=true`로 설정하면 최신 IT개발·데이터 공고 50건을 조회한다. 공고는 최대 4시간 동안 인스턴스 메모리에만 임시 보관한다. 승인된 쿼터를 기준으로 Preview에서 먼저 확인한다.
+- 원티드 [채용공고 API](https://openapi.wanted.jobs/api-docs/v2/)는 Jobs 권한과 신청 시 발급된 Client ID·Secret, 승인 환경 주소, 개발 직군 태그 ID를 서버 환경변수에 넣고 `WANTED_ENABLED=true`로 설정한다. 최신 공고 20건을 조회한다. 발급 양식에는 사업자등록번호가 필요하다.
+- 잡코리아 [채용정보 API 이용약관](https://www.jobkorea.co.kr/network/Popup_Xml.asp)은 개인 사용 목적을 승인 대상에서 제외하고 승인된 IP와 호출 링크를 요구한다. 개인용 환경의 출처 상태에 이 제약을 표시한다.
 - [Vercel Hobby](https://vercel.com/docs/plans/hobby)는 개인·비상업적 이용을 지원한다. [NestJS 직접 배포](https://vercel.com/docs/frameworks/backend/nestjs)와 Next.js를 두 프로젝트로 구성한다. [Cron](https://vercel.com/docs/schedules/cron-jobs/usage-and-pricing)은 일 1회, 예정 시각부터 최대 59분 오차가 있어 개인 마감 알림과 분리한다. 실수집 승인 전 Cron 설정을 연결하지 않는다.
 - [Supabase Free](https://supabase.com/pricing)는 DB 500MB, 기본 egress 5GB, 활성 프로젝트 2개 및 1주 비활동 시 일시 중지를 명시한다. 로컬과 분리된 Preview 환경을 사용하며 공급자 보존 조건에 따른 정리 작업은 운영 적용 전에 검토한다.
 
